@@ -51,7 +51,9 @@ def close_series(ticker, years=3):
         s = s.iloc[:, 0]
     s = s.dropna()
     s.index = pd.to_datetime(s.index).tz_localize(None)
-    return s
+    # drop bad prints (e.g. Yahoo's Dec-2019 NIFTYBEES glitch): >40% away from the local median is not a real index move
+    med = s.rolling(11, center=True, min_periods=3).median()
+    return s[(s / med - 1).abs() < 0.40]
 
 
 def rsi(s, n=14):
