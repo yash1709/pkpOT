@@ -3,3 +3,5 @@
 __pycache__/
 *.pyc
 daily_signals.csv
+paper_ledger.csv
+daily_signals_paper.csv

@@ -1,4 +1,4 @@
-# PKP 3.0 – Paiso Ka Ped signals
+﻿# PKP 3.0 – Paiso Ka Ped signals
 
 A signal engine and Streamlit dashboard based on the **Paiso Ka Ped (PKP) 3.0 with Option Trading** videos
 (Fire in India, Parts 1 & 2).
@@ -28,6 +28,12 @@ The **📅 Today** tab (the landing tab) shows what to do today: SIP due, buy-th
 and whether covered calls are allowed with the safest strikes. Set your SIP schedule (weekly or monthly) in the
 sidebar; a missed SIP stays "due" until you log it in the ledger. Each day's signals are appended to
 `daily_signals.csv` (shown under *Signal history*). Prices refresh every 15 minutes, or use *Refresh data now*.
+
+## Paper vs real ledger
+
+The sidebar **Ledger** switch toggles between **Real** (your `pkp_ledger.csv`) and **Paper (simulated)**. Paper mode
+replays the signal engine on history (`paper_tree.py`) so you can watch the signals without risking money; generate it
+with the sidebar button. Paper mode keeps its own ledger and signal history and shows a warning banner.
 
 ## Files
 
@@ -82,3 +88,4 @@ If the repo is private, grant Streamlit access to private repos when GitHub asks
 
 - **Docker / any VPS:** `pip install -r requirements.txt && streamlit run app.py --server.port 8501 --server.address 0.0.0.0`
 - **Hugging Face Spaces:** create a Streamlit Space and push the same files.
+

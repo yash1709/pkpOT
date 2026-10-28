@@ -32,7 +32,15 @@ def xirr(flows):
 def simulate(etf, years, sip_every):
     s = k.close_series(etf, years)
     rows = []
+    real_load = k.load_ledger
     k.load_ledger = lambda: pd.DataFrame(rows, columns=["date", "type", "price", "units"])  # engine reads this
+    try:
+        return _run(s, rows, etf, sip_every)
+    finally:
+        k.load_ledger = real_load  # never leave the engine pointing at the simulation
+
+
+def _run(s, rows, etf, sip_every):
     flows, sip_flows = [], []
     sip_units = 0
     peak_cash = cash = 0.0

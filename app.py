@@ -5,17 +5,31 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+import paper_tree
 import pkp_signals as k
+
+REAL_LEDGER = k.LEDGER
+PAPER_LEDGER = paper_tree.OUT
 
 st.set_page_config(page_title="PKP 3.0 Signals", page_icon="🌳", layout="wide")
 st.title("🌳 PKP 3.0 – Paiso Ka Ped signals")
 st.caption("ETF tree (SIP + buy-the-dip + profit booking) and index option selling. Educational, not financial advice.")
 
-DAILY_LOG = os.path.join(k.HERE, "daily_signals.csv")
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
 # ---- sidebar: the "yellow cells" ------------------------------------------------
 with st.sidebar:
+    mode = st.radio("Ledger", ["Real", "Paper (simulated)"], help="Paper = simulated tree for testing; Real = your trades.")
+    paper = mode.startswith("Paper")
+    k.LEDGER = PAPER_LEDGER if paper else REAL_LEDGER  # every ledger read/write in the engine follows this
+    if paper:
+        st.warning("📝 Paper mode: simulated trades, do not trade on these signals.")
+        yrs = st.slider("Simulate years", 1, 7, 5)
+        if st.button("⚙️ (Re)generate paper tree"):
+            with st.spinner("Replaying the engine on history…"):
+                paper_tree.simulate(k.CONFIG["etf"], yrs, 21)
+            st.cache_data.clear()
+            st.rerun()
     st.header("Settings")
     k.CONFIG["etf"] = st.text_input("ETF ticker (Yahoo)", k.CONFIG["etf"])
     k.CONFIG["sip_amount"] = st.number_input("SIP amount (₹)", 0, step=1000, value=k.CONFIG["sip_amount"])
@@ -47,19 +61,29 @@ def etf_quote(ticker):
 
 
 @st.cache_data(ttl=900, show_spinner="Computing option signals…")
-def opt(name, cp, pp, etf, sip, mp, bb, bp, nlot, blot):
-    # extra args only exist so the cache refreshes when settings change
+def opt(name, cp, pp, etf, sip, mp, bb, bp, nlot, blot, ledger_path, ledger_mtime):
+    # extra args only exist so the cache refreshes when settings or the ledger change
     return k.option_signals(name, cp or None, pp or None)
 
 
+def ledger_key():
+    return k.LEDGER, os.path.getmtime(k.LEDGER) if os.path.exists(k.LEDGER) else 0.0
+
+
 price, price_date = etf_quote(k.CONFIG["etf"])
-p = k.pkp_signals(price)
 today = date.today()
+if paper and not os.path.exists(PAPER_LEDGER):
+    st.info("No paper tree yet – click **(Re)generate paper tree** in the sidebar.")
+    st.stop()
+p = k.pkp_signals(price)
+DAILY_LOG = os.path.join(k.HERE, "daily_signals_paper.csv" if paper else "daily_signals.csv")
 
 
 # ---- Today (daily signal screen) ------------------------------------------------
 with tab_today:
-    st.subheader(f"Signals for {today:%A, %d %b %Y}")
+    st.subheader(f"Signals for {today:%A, %d %b %Y}" + ("  —  📝 PAPER" if paper else ""))
+    if paper:
+        st.warning("Paper mode: these signals come from a simulated ledger, not your real trades.")
     stale = (today - price_date).days
     st.caption(f"{k.CONFIG['etf']} last close ₹{price:,.2f} on {price_date:%d %b %Y}"
                + (f" — ⚠️ data is {stale} days old (weekend/holiday or feed delay)" if stale > 3 else ""))
@@ -98,7 +122,7 @@ with tab_today:
         try:
             r = opt(name, 0.0, 0.0, k.CONFIG["etf"], k.CONFIG["sip_amount"], k.CONFIG["min_profit"],
                     k.CONFIG["bid_base_amount"], k.CONFIG["bid_pct"],
-                    k.INDEXES["NIFTY"]["lot"], k.INDEXES["BANKNIFTY"]["lot"])
+                    k.INDEXES["NIFTY"]["lot"], k.INDEXES["BANKNIFTY"]["lot"], *ledger_key())
         except Exception as e:  # data hiccup should not blank the whole screen
             actions.append(("warn", f"{name}: option signals unavailable ({e})."))
             continue
@@ -149,7 +173,7 @@ with tab_today:
 
 # ---- ETF tree -------------------------------------------------------------------
 with tab_tree:
-    st.subheader("Trade ledger")
+    st.subheader("Trade ledger" + (" (paper)" if paper else ""))
     st.caption("Record every SIP / BID / SELL you actually execute. type ∈ SIP, BID, SELL.")
     led = k.load_ledger()
     edited = st.data_editor(
@@ -182,7 +206,7 @@ with tab_opt:
     pp = c2.number_input("Put premium per unit (0 = skip)", 0.0, step=1.0)
     r = opt(name, cp, pp, k.CONFIG["etf"], k.CONFIG["sip_amount"], k.CONFIG["min_profit"],
             k.CONFIG["bid_base_amount"], k.CONFIG["bid_pct"],
-            k.INDEXES["NIFTY"]["lot"], k.INDEXES["BANKNIFTY"]["lot"])
+            k.INDEXES["NIFTY"]["lot"], k.INDEXES["BANKNIFTY"]["lot"], *ledger_key())
 
     c = st.columns(4)
     c[0].metric("Spot", f"{r['spot']:,.2f}")
