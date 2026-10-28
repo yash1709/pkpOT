@@ -1,78 +1,178 @@
 ﻿"""Streamlit UI for the PKP 3.0 signal engine.  Run: streamlit run app.py"""
+import os
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
 import pkp_signals as k
 
-st.set_page_config(page_title="PKP 3.0 Signals", page_icon="ðŸŒ³", layout="wide")
-st.title("ðŸŒ³ PKP 3.0 â€“ Paiso Ka Ped signals")
+st.set_page_config(page_title="PKP 3.0 Signals", page_icon="🌳", layout="wide")
+st.title("🌳 PKP 3.0 – Paiso Ka Ped signals")
 st.caption("ETF tree (SIP + buy-the-dip + profit booking) and index option selling. Educational, not financial advice.")
+
+DAILY_LOG = os.path.join(k.HERE, "daily_signals.csv")
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
 # ---- sidebar: the "yellow cells" ------------------------------------------------
 with st.sidebar:
     st.header("Settings")
     k.CONFIG["etf"] = st.text_input("ETF ticker (Yahoo)", k.CONFIG["etf"])
-    k.CONFIG["sip_amount"] = st.number_input("SIP amount (â‚¹)", 0, step=1000, value=k.CONFIG["sip_amount"])
-    k.CONFIG["min_profit"] = st.number_input("Min profit to book (â‚¹)", 0, step=100, value=k.CONFIG["min_profit"])
-    k.CONFIG["bid_base_amount"] = st.number_input("First bid amount (â‚¹)", 0, step=500, value=k.CONFIG["bid_base_amount"])
+    k.CONFIG["sip_amount"] = st.number_input("SIP amount (₹)", 0, step=1000, value=k.CONFIG["sip_amount"])
+    k.CONFIG["min_profit"] = st.number_input("Min profit to book (₹)", 0, step=100, value=k.CONFIG["min_profit"])
+    k.CONFIG["bid_base_amount"] = st.number_input("First bid amount (₹)", 0, step=500, value=k.CONFIG["bid_base_amount"])
     k.CONFIG["bid_pct"] = st.number_input("First bid dip %", 0.5, 20.0, float(k.CONFIG["bid_pct"]), 0.5)
+    st.subheader("SIP schedule")
+    sip_freq = st.radio("Frequency", ["Weekly", "Monthly"], horizontal=True)
+    if sip_freq == "Weekly":
+        sip_wd = WEEKDAYS.index(st.selectbox("SIP weekday", WEEKDAYS))
+        sip_md = 1
+    else:
+        sip_md = st.number_input("SIP day of month", 1, 28, 1)
+        sip_wd = 0
     st.subheader("Lot sizes")
     k.INDEXES["NIFTY"]["lot"] = st.number_input("Nifty lot", 1, value=k.INDEXES["NIFTY"]["lot"])
     k.INDEXES["BANKNIFTY"]["lot"] = st.number_input("Bank Nifty lot (verify!)", 1, value=k.INDEXES["BANKNIFTY"]["lot"])
+    if st.button("🔄 Refresh data now"):
+        st.cache_data.clear()
+        st.rerun()
 
-tab_tree, tab_opt, tab_bt = st.tabs(["ETF tree", "Options", "Backtest"])
-
-
-@st.cache_data(ttl=900, show_spinner="Fetching pricesâ€¦")
-def etf_price(ticker):
-    return float(k.close_series(ticker, 1).iloc[-1])
+tab_today, tab_tree, tab_opt, tab_bt = st.tabs(["📅 Today", "ETF tree", "Options", "Backtest"])
 
 
-@st.cache_data(ttl=900, show_spinner="Computing option signalsâ€¦")
+@st.cache_data(ttl=900, show_spinner="Fetching prices…")
+def etf_quote(ticker):
+    s = k.close_series(ticker, 1)
+    return float(s.iloc[-1]), s.index[-1].date()
+
+
+@st.cache_data(ttl=900, show_spinner="Computing option signals…")
 def opt(name, cp, pp, etf, sip, mp, bb, bp, nlot, blot):
     # extra args only exist so the cache refreshes when settings change
     return k.option_signals(name, cp or None, pp or None)
 
 
+price, price_date = etf_quote(k.CONFIG["etf"])
+p = k.pkp_signals(price)
+today = date.today()
+
+
+# ---- Today (daily signal screen) ------------------------------------------------
+with tab_today:
+    st.subheader(f"Signals for {today:%A, %d %b %Y}")
+    stale = (today - price_date).days
+    st.caption(f"{k.CONFIG['etf']} last close ₹{price:,.2f} on {price_date:%d %b %Y}"
+               + (f" — ⚠️ data is {stale} days old (weekend/holiday or feed delay)" if stale > 3 else ""))
+
+    actions = []  # (kind, text)
+
+    # 1) SIP
+    due, sched = k.sip_due(today, sip_freq, sip_wd, sip_md)
+    if due:
+        actions.append(("buy", f"**SIP due** (scheduled {sched:%d %b}): buy **{p['sip']['buy_units']} units** "
+                               f"of {k.CONFIG['etf']} (~₹{k.CONFIG['sip_amount']:,})."))
+    else:
+        actions.append(("ok", f"SIP: done for the cycle that started {sched:%d %b}. Next one is not due yet."))
+
+    # 2) BID and 3) SELL
+    if "next_bid" in p:
+        b, sl = p["next_bid"], p["sell"]
+        if b["eligible"]:
+            actions.append(("buy", f"**BUY THE DIP – bid #{b['n']}:** buy **{b['units']} units** "
+                                   f"(₹{b['amount']:,}) at ~₹{price:,.2f}."))
+        else:
+            actions.append(("ok", f"Bid #{b['n']}: wait. Triggers at ₹{b['trigger_price']:,.2f} "
+                                  f"({b['trigger_pct']:.0f}% from PKP avg) – now {p['profit_pct']:.2f}%."))
+        if sl["eligible"]:
+            actions.append(("sell", f"**BOOK PROFIT:** sell **{sl['units']} units** (~₹{sl['amount']:,.0f}), "
+                                    f"then reset bid cycle to 0 in the ledger."))
+        else:
+            actions.append(("ok", f"Sell: not eligible (notional profit ₹{p['profit']:,.0f} "
+                                  f"< ₹{k.CONFIG['min_profit']:,})."))
+    else:
+        actions.append(("ok", "Bid / sell: no position in the ledger yet – start with the SIP."))
+
+    # 4) Options
+    opt_rows = []
+    for name in k.INDEXES:
+        try:
+            r = opt(name, 0.0, 0.0, k.CONFIG["etf"], k.CONFIG["sip_amount"], k.CONFIG["min_profit"],
+                    k.CONFIG["bid_base_amount"], k.CONFIG["bid_pct"],
+                    k.INDEXES["NIFTY"]["lot"], k.INDEXES["BANKNIFTY"]["lot"])
+        except Exception as e:  # data hiccup should not blank the whole screen
+            actions.append(("warn", f"{name}: option signals unavailable ({e})."))
+            continue
+        mc, mp = r["monthly"]["call"], r["monthly"]["put"]
+        if r["covered_call_ok"]:
+            actions.append(("buy", f"**{name} covered call allowed:** sell monthly CALL at "
+                                   f"**{mc['max']['strike']:,.0f}** (safest) or {mc['2nd_max']['strike']:,.0f} "
+                                   f"if premium ≥ ₹{k.MIN_MONTHLY_PREMIUM:,}/lot. Expiry {r['next_monthly_expiry']}."))
+        else:
+            actions.append(("warn", f"{name} covered calls: **blocked** – {r['covered_call_flag']}"))
+        w12 = r["weekly"].get("12w") if r["weekly"] else None
+        opt_rows.append({
+            "Index": name, "Spot": round(r["spot"], 2), "RSI": round(r["rsi"], 1),
+            "Call (monthly safest)": mc["max"]["strike"], "Put (monthly safest)": mp["max"]["strike"],
+            "Weekly call 12w": w12["call_strike"] if w12 else None,
+            "Weekly put 12w": w12["put_strike"] if w12 else None,
+            "Call allowed": "✅" if r["covered_call_ok"] else "⛔",
+        })
+
+    # headline banner
+    n_act = sum(1 for kd, _ in actions if kd in ("buy", "sell"))
+    if n_act:
+        st.error(f"🔔 {n_act} action(s) today")
+    else:
+        st.success("✅ No trades today – nothing to do.")
+    for kind, text in actions:
+        {"buy": st.warning, "sell": st.error, "ok": st.info, "warn": st.info}[kind](
+            ("🟢 " if kind == "buy" else "🔴 " if kind == "sell" else "⚪ ") + text)
+
+    if opt_rows:
+        st.markdown("**Option levels**")
+        st.dataframe(pd.DataFrame(opt_rows), width="stretch", hide_index=True)
+        st.caption("Check the real premium in your option chain: monthly ≥ ₹1,000/lot, weekly ≥ ₹400/lot, else skip. "
+                   "Put selling needs cash set aside – see the Options tab.")
+
+    # daily log (one row per date, latest run wins)
+    row = {"date": today.isoformat(), "price_date": price_date.isoformat(), "etf_price": round(price, 2),
+           "signals": " | ".join(t.replace("**", "") for kd, t in actions if kd in ("buy", "sell", "warn"))}
+    try:
+        hist = pd.read_csv(DAILY_LOG) if os.path.exists(DAILY_LOG) else pd.DataFrame(columns=row)
+        hist = pd.concat([hist[hist["date"] != row["date"]], pd.DataFrame([row])], ignore_index=True)
+        hist.to_csv(DAILY_LOG, index=False)
+    except OSError:
+        hist = pd.DataFrame([row])
+    with st.expander("📜 Signal history"):
+        st.dataframe(hist.sort_values("date", ascending=False), width="stretch", hide_index=True)
+
+
 # ---- ETF tree -------------------------------------------------------------------
 with tab_tree:
-    price = etf_price(k.CONFIG["etf"])
     st.subheader("Trade ledger")
-    st.caption("Record every SIP / BID / SELL you actually execute. type âˆˆ SIP, BID, SELL.")
+    st.caption("Record every SIP / BID / SELL you actually execute. type ∈ SIP, BID, SELL.")
     led = k.load_ledger()
     edited = st.data_editor(
         led, num_rows="dynamic", width="stretch",
         column_config={"type": st.column_config.SelectboxColumn(options=["SIP", "BID", "SELL"], required=True)},
     )
-    if st.button("ðŸ’¾ Save ledger"):
+    if st.button("💾 Save ledger"):
         edited.dropna(how="all").to_csv(k.LEDGER, index=False)
         st.success("Saved.")
         st.rerun()
 
-    p = k.pkp_signals(price)
-    st.subheader(f"Signals â€“ {k.CONFIG['etf']} @ â‚¹{price:,.2f}")
+    st.subheader(f"Position – {k.CONFIG['etf']} @ ₹{price:,.2f}")
     if "value" in p:
         s = p["state"]
         c = st.columns(5)
         c[0].metric("Units", f"{s['units']:,.0f}")
-        c[1].metric("Base invested", f"â‚¹{s['base']:,.0f}")
-        c[2].metric("PKP avg price", f"â‚¹{p['pkp_avg']:,.2f}")
-        c[3].metric("Value", f"â‚¹{p['value']:,.0f}")
-        c[4].metric("Notional P/L", f"â‚¹{p['profit']:,.0f}", f"{p['profit_pct']:.2f}%")
+        c[1].metric("Base invested", f"₹{s['base']:,.0f}")
+        c[2].metric("PKP avg price", f"₹{p['pkp_avg']:,.2f}")
+        c[3].metric("Value", f"₹{p['value']:,.0f}")
+        c[4].metric("Notional P/L", f"₹{p['profit']:,.0f}", f"{p['profit_pct']:.2f}%")
     else:
         st.info(p["note"])
 
-    st.success(f"**SIP:** buy {p['sip']['buy_units']} units (~â‚¹{k.CONFIG['sip_amount']:,}) on your SIP day.")
-    if "next_bid" in p:
-        b = p["next_bid"]
-        msg = (f"**BID #{b['n']}:** trigger {b['trigger_pct']:.0f}% (price â‰¤ â‚¹{b['trigger_price']:,.2f}) â€“ "
-               f"buy {b['units']} units (â‚¹{b['amount']:,})")
-        (st.error("ðŸ”” BUY NOW â€“ " + msg) if b["eligible"] else st.info("Wait â€“ " + msg))
-        sl = p["sell"]
-        if sl["eligible"]:
-            st.error(f"ðŸ”” **SELL {sl['units']} units** (~â‚¹{sl['amount']:,.0f}) and reset the bid cycle to 0.")
-        else:
-            st.info(f"**SELL:** not eligible (profit below â‚¹{k.CONFIG['min_profit']:,}).")
 
 # ---- Options --------------------------------------------------------------------
 with tab_opt:
@@ -87,10 +187,10 @@ with tab_opt:
     c = st.columns(4)
     c[0].metric("Spot", f"{r['spot']:,.2f}")
     c[1].metric("RSI(14)", f"{r['rsi']:.1f}")
-    c[2].metric("1 lot value", f"â‚¹{r['one_lot_value']:,.0f}")
+    c[2].metric("1 lot value", f"₹{r['one_lot_value']:,.0f}")
     c[3].metric("Next monthly expiry", f"{r['next_monthly_expiry']}", f"{r['days_left']} days", delta_color="off")
     (st.success if r["covered_call_ok"] else st.error)(
-        f"{r['covered_call_flag']}  (ETF holding â‚¹{r['holding_value']:,.0f})")
+        f"{r['covered_call_flag']}  (ETF holding ₹{r['holding_value']:,.0f})")
 
     rows = []
     for side in ("call", "put"):
@@ -107,11 +207,11 @@ with tab_opt:
 
     if r["weekly"]:
         u, d = r["weekly"]["up_weeks_12"], r["weekly"]["down_weeks_12"]
-        st.write(f"Last 12 weeks: **{u} up / {d} down** â†’ {'puts' if u > d else 'calls'} historically safer.")
+        st.write(f"Last 12 weeks: **{u} up / {d} down** → {'puts' if u > d else 'calls'} historically safer.")
     for key in ("call_signal", "put_signal"):
         if key in r:
             st.write(f"**{key.replace('_', ' ').title()}:** {r[key]}")
-    st.caption("Premium floors from the video: monthly â‰¥ â‚¹1,000 per lot, weekly â‰¥ â‚¹400 per lot.")
+    st.caption("Premium floors from the video: monthly ≥ ₹1,000 per lot, weekly ≥ ₹400 per lot.")
 
     with st.expander("Cash-secured put recovery calculator"):
         a, b_, c_ = st.columns(3)
@@ -119,7 +219,8 @@ with tab_opt:
         exp = b_.number_input("Expected expiry close", value=float(strike) - 200)
         spot0 = c_.number_input("Spot when sold", value=float(r["spot"]))
         need = k.csp_min_investment(strike, exp, spot0, k.INDEXES[name]["lot"])
-        st.write(f"Minimum ETF investment (secondary ETF) to recover the loss on a rebound: **â‚¹{need:,.0f}**")
+        st.write(f"Minimum ETF investment (secondary ETF) to recover the loss on a rebound: **₹{need:,.0f}**")
+
 
 # ---- Backtest -------------------------------------------------------------------
 with tab_bt:
@@ -128,10 +229,9 @@ with tab_bt:
     if st.button("Run backtest"):
         res = k.backtest(years, sip_every=every)
         c = st.columns(4)
-        c[0].metric("Base invested", f"â‚¹{res['base_invested']:,.0f}")
-        c[1].metric("Profit booked", f"â‚¹{res['profit_booked']:,.0f}")
-        c[2].metric("Holding value", f"â‚¹{res['holding_value']:,.0f}")
-        c[3].metric("Total gain", f"â‚¹{res['total_gain']:,.0f}")
-        st.write(f"{res['sips']:.0f} SIPs Â· {res['bids']:.0f} bids Â· {res['sells']:.0f} sells Â· "
+        c[0].metric("Base invested", f"₹{res['base_invested']:,.0f}")
+        c[1].metric("Profit booked", f"₹{res['profit_booked']:,.0f}")
+        c[2].metric("Holding value", f"₹{res['holding_value']:,.0f}")
+        c[3].metric("Total gain", f"₹{res['total_gain']:,.0f}")
+        st.write(f"{res['sips']:.0f} SIPs · {res['bids']:.0f} bids · {res['sells']:.0f} sells · "
                  f"{res['units_left']:,.0f} units left")
-

@@ -112,6 +112,25 @@ def pkp_signals(price, cfg=CONFIG):
     return out
 
 
+def sip_due(today, freq="Weekly", weekday=0, monthday=1, ledger=None):
+    """True if the most recent scheduled SIP date (<= today) has no SIP recorded on/after it.
+
+    Returns (due, scheduled_date). Missed days stay 'due' until you log the SIP.
+    """
+    ledger = load_ledger() if ledger is None else ledger
+    if freq == "Weekly":
+        sched = today - timedelta(days=(today.weekday() - weekday) % 7)
+    else:  # Monthly
+        day = min(monthday, 28)
+        sched = today.replace(day=day)
+        if sched > today:
+            prev = today.replace(day=1) - timedelta(days=1)
+            sched = prev.replace(day=day)
+    sips = pd.to_datetime(ledger.loc[ledger["type"].astype(str).str.upper() == "SIP", "date"], errors="coerce")
+    done = bool((sips.dt.date >= sched).any()) if len(sips) else False
+    return (not done), sched
+
+
 # ---- Option selling -------------------------------------------------------------
 def monthly_expiries(idx):
     """Last Tuesday of each month; if not a trading day, previous trading day (as in the sheet)."""

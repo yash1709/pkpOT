@@ -22,6 +22,13 @@ A signal engine and Streamlit dashboard based on the **Paiso Ka Ped (PKP) 3.0 wi
 - Premium filter: monthly ≥ ₹1,000 per lot, weekly ≥ ₹400 per lot.
 - Cash-secured put recovery calculator, RSI, and up/down-week bias.
 
+## Daily signal screen
+
+The **📅 Today** tab (the landing tab) shows what to do today: SIP due, buy-the-dip bid, profit-booking sell,
+and whether covered calls are allowed with the safest strikes. Set your SIP schedule (weekly or monthly) in the
+sidebar; a missed SIP stays "due" until you log it in the ledger. Each day's signals are appended to
+`daily_signals.csv` (shown under *Signal history*). Prices refresh every 15 minutes, or use *Refresh data now*.
+
 ## Files
 
 | File | Purpose |
